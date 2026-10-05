@@ -1,6 +1,7 @@
 import './style.css';
 
 type Range = '24h' | '7d' | '30d';
+type ChartMetric = 'spend' | 'tokens';
 type MetricKey = 'credits' | 'spend' | 'requests' | 'tokens' | 'cacheHitRate';
 type MetricTrendPoint = { date: string; spend: number | null; requests: number | null; tokens: number | null; cacheHitRate: number | null };
 type DashboardData = {
@@ -11,7 +12,7 @@ type DashboardData = {
   metrics: { spend: number | null; requests: number | null; tokens: number | null; cacheHitRate: number | null };
   models: Array<{ name: string; spend: number; tokens: number }>;
   keys: Array<{ name: string; tokens: number }>;
-  trend: Array<{ date: string; spend: number; model: string }>;
+  trend: Array<{ date: string; spend: number | null; tokens: number | null; model: string }>;
   metricTrend: MetricTrendPoint[];
   breakdown: { prompt: number | null; completion: number | null; reasoning: number | null };
   capabilities: { modelDimension: boolean; keyDimension: boolean };
@@ -20,6 +21,7 @@ type DashboardData = {
 const root = document.querySelector<HTMLElement>('#app')!;
 const AUTO_REFRESH_MS = 15_000;
 let range: Range = '24h';
+let chartMetric: ChartMetric = 'spend';
 let latest: DashboardData | null = null;
 let loading = false;
 let errorMessage = '';
@@ -108,6 +110,10 @@ function formatMetricValue(metric: MetricKey, value: number): string {
   return compact(value);
 }
 
+function formatChartValue(metric: ChartMetric, value: number): string {
+  return metric === 'spend' ? money(value) : compact(value);
+}
+
 function metricNumberMarkup(value: string): string {
   return [...value].map(character => `<span class="metric-glyph" aria-hidden="true">${escapeHtml(character)}</span>`).join('');
 }
@@ -173,8 +179,8 @@ function metricCard(title: string, value: string, name: keyof typeof icons, colo
   </article>`;
 }
 
-function spendTrendChart(data: DashboardData): string {
-  if (!data.capabilities.modelDimension) return emptyState('Model-level spend isn’t available in the analytics response.');
+function usageTrendChart(data: DashboardData): string {
+  if (!data.capabilities.modelDimension) return emptyState('Model-level usage isn’t available in the analytics response.');
   const points = data.trend;
   const bucketMs = range === '24h' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
   const buckets = new Map<string, Map<string, number>>();
@@ -186,9 +192,10 @@ function spendTrendChart(data: DashboardData): string {
     if (!Number.isFinite(timestamp)) continue;
     const dateKey = new Date(Math.floor(timestamp / bucketMs) * bucketMs).toISOString();
     const bucket = buckets.get(dateKey) ?? new Map<string, number>();
-    bucket.set(point.model, (bucket.get(point.model) ?? 0) + point.spend);
+    const value = Number(point[chartMetric] ?? 0);
+    bucket.set(point.model, (bucket.get(point.model) ?? 0) + value);
     buckets.set(dateKey, bucket);
-    modelTotals.set(point.model, (modelTotals.get(point.model) ?? 0) + point.spend);
+    modelTotals.set(point.model, (modelTotals.get(point.model) ?? 0) + value);
   }
 
   const dates = [...buckets.keys()].sort();
@@ -217,7 +224,7 @@ function spendTrendChart(data: DashboardData): string {
       if (value <= 0) return '';
       const segmentHeight = value / max * height;
       y -= segmentHeight;
-      return `<rect data-bucket-key="${escapeHtml(date)}" data-model="${escapeHtml(model)}" data-model-spend="${value}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${segmentHeight.toFixed(1)}" fill="${colorFor.get(model)}" stroke="#0c0f11" stroke-width=".8"/>`;
+       return `<rect data-bucket-key="${escapeHtml(date)}" data-model="${escapeHtml(model)}" data-model-value="${value}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${segmentHeight.toFixed(1)}" fill="${colorFor.get(model)}" stroke="#0c0f11" stroke-width=".8"/>`;
     }).join('');
     return `<g data-bucket-group="${escapeHtml(date)}"><rect class="chart-column-highlight" x="${slotX.toFixed(1)}" y="0" width="${slotWidth.toFixed(1)}" height="${height}"/><rect data-bucket-key="${escapeHtml(date)}" x="${slotX.toFixed(1)}" y="0" width="${slotWidth.toFixed(1)}" height="${height}" fill="transparent" pointer-events="all"/>${segments}</g>`;
   }).join('');
@@ -234,7 +241,7 @@ function spendTrendChart(data: DashboardData): string {
   }).join('');
   const legend = models.map(model => `<span class="chart-legend-item"><i style="background:${colorFor.get(model)}"></i>${escapeHtml(model)}</span>`).join('');
 
-  return `<div class="chart-wrap"><div class="chart-y-labels"><span>${money(max)}</span><span>${money(max * .75)}</span><span>${money(max * .5)}</span><span>${money(max * .25)}</span><span>$0</span></div><div class="spend-chart-stage"><svg class="spend-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Stacked spend by model during ${labelForRange(range)}">${grid}${columns}</svg><div class="chart-tooltip" role="tooltip" hidden></div></div><div class="chart-x-labels" style="grid-template-columns:repeat(${labelIndexes.length},minmax(0,1fr))">${labels}</div><div class="sr-only">Stacked by model: ${models.map(escapeHtml).join(', ')}</div></div><div class="panel-foot"><div class="chart-legend">${legend}</div><span class="panel-foot-range">${labelForRange(range)}</span></div>`;
+  return `<div class="chart-wrap"><div class="chart-y-labels"><span>${formatChartValue(chartMetric, max)}</span><span>${formatChartValue(chartMetric, max * .75)}</span><span>${formatChartValue(chartMetric, max * .5)}</span><span>${formatChartValue(chartMetric, max * .25)}</span><span>${chartMetric === 'spend' ? '$0' : '0'}</span></div><div class="spend-chart-stage"><svg class="spend-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Stacked ${chartMetric} by model during ${labelForRange(range)}">${grid}${columns}</svg><div class="chart-tooltip" role="tooltip" hidden></div></div><div class="chart-x-labels" style="grid-template-columns:repeat(${labelIndexes.length},minmax(0,1fr))">${labels}</div><div class="sr-only">Stacked by model: ${models.map(escapeHtml).join(', ')}</div></div><div class="panel-foot"><div class="chart-legend">${legend}</div><span class="panel-foot-range">${labelForRange(range)}</span></div>`;
 }
 
 function tokenBreakdown(data: DashboardData): string {
@@ -279,8 +286,8 @@ function appTemplate(): string {
           ${metricCard('Cache hit rate', percent(metrics?.cacheHitRate), 'activity', '#f5b942', 'cacheHitRate', data)}
         </section>
         <section class="chart-panel panel">
-          <div class="panel-heading"><div><h2>Spend over time</h2><p>Hourly usage · all models</p></div><div class="chart-total"><span>Range total</span><strong>${money(metrics?.spend)}</strong></div></div>
-          ${data ? spendTrendChart(data) : emptyState(loading ? 'Loading activity…' : 'Connect to load your usage history.')}
+          <div class="panel-heading"><div><h2>${chartMetric === 'spend' ? 'Spend over time' : 'Tokens over time'}</h2><p>${range === '24h' ? 'Hourly' : 'Daily'} usage · all models</p></div><div class="chart-tools"><div class="chart-switch" role="group" aria-label="Graph metric"><button type="button" data-chart-metric="spend" aria-pressed="${chartMetric === 'spend'}">Spend</button><button type="button" data-chart-metric="tokens" aria-pressed="${chartMetric === 'tokens'}">Tokens</button></div><div class="chart-total"><span>Range total</span><strong>${chartMetric === 'spend' ? money(metrics?.spend) : compact(metrics?.tokens)}</strong></div></div></div>
+          ${data ? usageTrendChart(data) : emptyState(loading ? 'Loading activity…' : 'Connect to load your usage history.')}
         </section>
         <section class="usage-layout">
           <article class="panel usage-keys" id="keys"><div class="panel-heading"><div><h2>Top API keys</h2><p>Ranked by generated tokens</p></div><span class="heading-icon">${icon('key')}</span></div>${data ? keyList(data) : emptyState(loading ? 'Loading API key usage…' : 'Connect to load key usage.')}</article>
@@ -308,6 +315,14 @@ function render(): void {
   });
   root.querySelector<HTMLButtonElement>('#refresh')?.addEventListener('click', () => void loadDashboard());
   root.querySelector<HTMLButtonElement>('#retry')?.addEventListener('click', () => void loadDashboard());
+  for (const button of root.querySelectorAll<HTMLButtonElement>('[data-chart-metric]')) {
+    button.addEventListener('click', () => {
+      const next = button.dataset.chartMetric;
+      if (next !== 'spend' && next !== 'tokens') return;
+      chartMetric = next;
+      render();
+    });
+  }
 }
 
 function animateMetricValues(previousValues: Map<string, string>): void {
@@ -393,7 +408,7 @@ function attachSpendTooltip(): void {
     for (const point of latest!.trend) {
       const timestamp = new Date(point.date).getTime();
       if (Number.isFinite(timestamp) && new Date(Math.floor(timestamp / bucketMs) * bucketMs).toISOString() === dateKey) {
-        byModel.set(point.model, (byModel.get(point.model) ?? 0) + point.spend);
+        byModel.set(point.model, (byModel.get(point.model) ?? 0) + Number(point[chartMetric] ?? 0));
       }
     }
     const entries = [...byModel.entries()].filter(([, value]) => value > 0).sort((a, b) => b[1] - a[1]);
@@ -402,15 +417,16 @@ function attachSpendTooltip(): void {
     const date = new Date(dateKey);
     const dateLabel = Number.isNaN(date.valueOf()) ? dateKey : date.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: range === '24h' ? 'numeric' : undefined });
     const modelTotals = new Map<string, number>();
-    for (const point of latest!.trend) modelTotals.set(point.model, (modelTotals.get(point.model) ?? 0) + point.spend);
+    for (const point of latest!.trend) modelTotals.set(point.model, (modelTotals.get(point.model) ?? 0) + Number(point[chartMetric] ?? 0));
     const colors = ['#ff684c', '#4c8dff', '#a46aff', '#f5b942', '#42c4a6', '#ed5caa', '#7c8994'];
     const rankedModels = [...modelTotals.keys()].sort((a, b) => modelTotals.get(b)! - modelTotals.get(a)!);
     const colorFor = new Map(rankedModels.map((model, index) => [model, colors[index % colors.length]!]));
 
+    const detailValue = (value: number) => chartMetric === 'spend' ? money(value) : `${compact(value)} tokens`;
     const details = entries.length
-      ? entries.map(([model, value]) => `<div class="chart-tooltip-row"><span><i style="background:${colorFor.get(model)}"></i>${escapeHtml(model)}</span><strong>${money(value)}</strong></div>`).join('')
-      : '<div class="chart-tooltip-empty">No spend in this period</div>';
-    tooltip.innerHTML = `<div class="chart-tooltip-heading"><span>${escapeHtml(dateLabel)}</span><strong>${money(total)}</strong></div><div class="chart-tooltip-models">${details}</div>`;
+      ? entries.map(([model, value]) => `<div class="chart-tooltip-row"><span><i style="background:${colorFor.get(model)}"></i>${escapeHtml(model)}</span><strong>${detailValue(value)}</strong></div>`).join('')
+      : `<div class="chart-tooltip-empty">No ${chartMetric} in this period</div>`;
+    tooltip.innerHTML = `<div class="chart-tooltip-heading"><span>${escapeHtml(dateLabel)}</span><strong>${detailValue(total)}</strong></div><div class="chart-tooltip-models">${details}</div>`;
     tooltip.hidden = false;
 
     const bounds = stage.getBoundingClientRect();

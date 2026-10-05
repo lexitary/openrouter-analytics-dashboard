@@ -158,6 +158,11 @@ async function dashboardData(range) {
   const keyDimension = findDimension(availableDimensions, ['api_key_id', 'api_key'], /api.?key/i);
 
   const summaryMetrics = [spend, requestCount, totalTokens, cacheHitRate].filter(Boolean);
+  const modelTrendMetrics = [
+    spend,
+    totalTokens,
+    ...(totalTokens ? [] : [promptTokens, completionTokens, reasoningTokens]),
+  ].filter(Boolean);
   const metricTrendMetrics = [...new Set([
     spend,
     requestCount,
@@ -170,7 +175,7 @@ async function dashboardData(range) {
     queryAnalytics(summaryMetrics, [], start, end, undefined, 1),
     modelDimension ? queryAnalytics([spend, totalTokens].filter(Boolean), [modelDimension], start, end, undefined, 12) : Promise.resolve([]),
     completionTokens && keyDimension ? queryAnalytics([completionTokens], [keyDimension], start, end, undefined, 8) : Promise.resolve([]),
-    spend && modelDimension ? queryAnalytics([spend], [modelDimension], start, end, granularity, 300) : Promise.resolve([]),
+    modelDimension && modelTrendMetrics.length ? queryAnalytics(modelTrendMetrics, [modelDimension], start, end, granularity, 300) : Promise.resolve([]),
     queryAnalytics(breakdownMetrics, [], start, end, undefined, 1),
     queryAnalytics(metricTrendMetrics, [], start, end, granularity, 300),
   ]);
@@ -222,7 +227,15 @@ async function dashboardData(range) {
       const name = keyMap.get(id) ?? keyMap.get(id.toLowerCase()) ?? (id || 'Unlabeled key');
       return { name, tokens: completionTokens ? Number(row[completionTokens] ?? 0) : 0 };
     }).sort((a, b) => b.tokens - a.tokens),
-    trend: trend.map(row => ({ date: row.date__hour ?? row.date__day ?? row.date ?? '', spend: spend ? Number(row[spend] ?? 0) : 0, model: modelDimension ? displayModelName(row[modelDimension], modelNames) : 'Spend' })),
+    trend: trend.map(row => ({
+      date: row.date__hour ?? row.date__day ?? row.date ?? '',
+      spend: spend ? Number(row[spend] ?? 0) : null,
+      tokens: totalTokens
+        ? Number(row[totalTokens] ?? 0)
+        : (promptTokens ? Number(row[promptTokens] ?? 0) : 0)
+          + (completionTokens ? Number(row[completionTokens] ?? 0) : reasoningTokens ? Number(row[reasoningTokens] ?? 0) : 0),
+      model: modelDimension ? displayModelName(row[modelDimension], modelNames) : 'Other',
+    })),
     metricTrend: metricTrend.map(row => ({
       date: row.date__hour ?? row.date__day ?? row.date ?? '',
       spend: spend ? Number(row[spend] ?? 0) : null,
