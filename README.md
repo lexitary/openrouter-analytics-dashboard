@@ -1,6 +1,10 @@
 # OpenRouter dashboard
 
-A private, local dashboard for OpenRouter credits and usage. The interface follows the Activity overview: credits, spend, requests, token volume, cache hit rate, top API keys, model usage, spend over time, and prompt/completion/reasoning tokens.
+A vibecoded private, local dashboard for OpenRouter credits and usage. The interface follows the Activity overview: credits, spend, requests, token volume, cache hit rate, top API keys, model usage, spend over time, and prompt/completion/reasoning tokens.
+
+Made entirely with GPT-6 Luna medium/high it cost me ~50¢ so far :)
+
+<img width="1673" height="1192" alt="image" src="https://github.com/user-attachments/assets/4ad545d6-1d85-49ee-a3fd-dbbd401662cb" />
 
 ## Run locally
 
