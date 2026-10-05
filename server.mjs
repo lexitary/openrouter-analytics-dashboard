@@ -176,7 +176,16 @@ async function dashboardData(range) {
   ]);
 
   const keyRows = keysSettled.status === 'fulfilled' ? keysSettled.value?.data ?? [] : [];
-  const keyMap = new Map(keyRows.map(key => [String(key.hash ?? key.id ?? ''), key.name ?? 'Unnamed key']));
+  const keyMap = new Map();
+  for (const key of keyRows) {
+    const name = key.name ?? 'Unnamed key';
+    for (const identifier of [key.hash, key.id, key.key_id]) {
+      if (identifier == null) continue;
+      const id = String(identifier);
+      keyMap.set(id, name);
+      keyMap.set(id.toLowerCase(), name);
+    }
+  }
   const summaryRow = summary[0] ?? {};
   const breakdownRow = breakdown[0] ?? {};
   const fallbackTokenTotal = (promptTokens ? Number(breakdownRow[promptTokens] ?? 0) : 0)
@@ -210,7 +219,8 @@ async function dashboardData(range) {
     })).sort((a, b) => b.spend - a.spend),
     keys: keys.map(row => {
       const id = String(row[keyDimension] ?? '');
-      return { name: keyMap.get(id) ?? (id ? `${id.slice(0, 8)}…${id.slice(-4)}` : 'Unlabeled key'), tokens: completionTokens ? Number(row[completionTokens] ?? 0) : 0 };
+      const name = keyMap.get(id) ?? keyMap.get(id.toLowerCase()) ?? (id || 'Unlabeled key');
+      return { name, tokens: completionTokens ? Number(row[completionTokens] ?? 0) : 0 };
     }).sort((a, b) => b.tokens - a.tokens),
     trend: trend.map(row => ({ date: row.date__hour ?? row.date__day ?? row.date ?? '', spend: spend ? Number(row[spend] ?? 0) : 0, model: modelDimension ? displayModelName(row[modelDimension], modelNames) : 'Spend' })),
     metricTrend: metricTrend.map(row => ({

@@ -23,6 +23,7 @@ let range: Range = '24h';
 let latest: DashboardData | null = null;
 let loading = false;
 let errorMessage = '';
+let nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
 
 const icons = {
   activity: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
@@ -60,6 +61,10 @@ function percent(value: number | null | undefined): string {
 
 function labelForRange(value: Range): string {
   return value === '24h' ? 'Past 24 hours' : value === '7d' ? 'Past 7 days' : 'Past 30 days';
+}
+
+function refreshCountdown(): string {
+  return `Refresh in ${Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000))}s`;
 }
 
 function intervalKeys(updatedAt: string): string[] {
@@ -103,6 +108,22 @@ function formatMetricValue(metric: MetricKey, value: number): string {
   return compact(value);
 }
 
+function metricNumberMarkup(value: string): string {
+  return [...value].map(character => `<span class="metric-glyph" aria-hidden="true">${escapeHtml(character)}</span>`).join('');
+}
+
+function rollingMetricMarkup(value: string, previous: string): string {
+  const oldDigits = [...previous].filter(character => /\d/.test(character)).reverse();
+  const characters = [...value];
+  return characters.map((character, index) => {
+    if (!/\d/.test(character)) return `<span class="metric-glyph" aria-hidden="true">${escapeHtml(character)}</span>`;
+    const digitIndex = characters.slice(index + 1).filter(next => /\d/.test(next)).length;
+    const oldDigit = oldDigits[digitIndex];
+    if (oldDigit == null || oldDigit === character) return `<span class="metric-glyph" aria-hidden="true">${character}</span>`;
+    return `<span class="metric-roll-cell" aria-hidden="true"><span class="metric-roll-track"><span>${oldDigit}</span><span>${character}</span></span></span>`;
+  }).join('');
+}
+
 function formatInterval(dateValue: string): string {
   const date = new Date(dateValue);
   if (Number.isNaN(date.valueOf())) return dateValue;
@@ -140,12 +161,15 @@ function sparkline(samples: Array<{ date: string; value: number }>, color: strin
   return `<svg class="metric-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" data-metric-sparkline="${metric}" role="img" aria-label="${metric} trend, hover to inspect intervals"><path d="${area}" fill="${color}" opacity=".09"/><path d="${line}" fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle class="sparkline-marker" cx="${last.x}" cy="${last.y}" r="2.5" fill="${color}" opacity="0"/></svg>`;
 }
 
-function metricCard(title: string, value: string, subtitle: string, name: keyof typeof icons, color: string, metric: MetricKey, data: DashboardData | null): string {
-  const samples = data ? metricSamples(data, metric) : [];
+function metricCard(title: string, value: string, name: keyof typeof icons, color: string, metric: MetricKey, data: DashboardData | null): string {
+  const samples = data && metric !== 'credits' ? metricSamples(data, metric) : [];
   const defaultSamples = samples.length ? samples : [{ date: '', value: 0 }, { date: '', value: 0 }];
-  return `<article class="metric-card">
-    <div class="metric-top"><span class="metric-label"><span class="metric-icon" style="--metric-color:${color}">${icon(name, 15)}</span>${title}</span>${sparkline(defaultSamples, data ? color : '#4a5155', metric)}</div>
-    <div class="metric-value-row"><div class="metric-value" data-metric-value="${metric}" data-default-value="${escapeHtml(value)}">${value}</div></div><div class="metric-foot"><span>${subtitle}</span><span class="metric-period" data-metric-period>${labelForRange(range)}</span></div>
+  const graph = metric === 'credits'
+    ? '<span class="metric-sparkline-spacer" aria-hidden="true"></span>'
+    : sparkline(defaultSamples, data ? color : '#4a5155', metric);
+  return `<article class="metric-card" data-metric-label="${escapeHtml(title)}">
+    <div class="metric-top"><span class="metric-label"><span class="metric-icon" style="--metric-color:${color}">${icon(name, 15)}</span>${title}</span>${graph}</div>
+    <div class="metric-value-row"><div class="metric-value" aria-label="${escapeHtml(value)}" data-metric-value="${metric}" data-default-value="${escapeHtml(value)}">${metricNumberMarkup(value)}</div></div>
   </article>`;
 }
 
@@ -153,17 +177,10 @@ function spendTrendChart(data: DashboardData): string {
   if (!data.capabilities.modelDimension) return emptyState('Model-level spend isn’t available in the analytics response.');
   const points = data.trend;
   const bucketMs = range === '24h' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
-  const rangeHours = range === '24h' ? 24 : range === '7d' ? 24 * 7 : 24 * 30;
-  const rangeMs = rangeHours * 60 * 60 * 1000;
-  const endMs = new Date(data.updatedAt).getTime();
-  const firstBucket = Math.floor((endMs - rangeMs) / bucketMs) * bucketMs;
-  const lastBucket = Math.floor(endMs / bucketMs) * bucketMs;
   const buckets = new Map<string, Map<string, number>>();
   const modelTotals = new Map<string, number>();
 
-  for (let timestamp = firstBucket; timestamp <= lastBucket; timestamp += bucketMs) {
-    buckets.set(new Date(timestamp).toISOString(), new Map<string, number>());
-  }
+  for (const date of intervalKeys(data.updatedAt)) buckets.set(date, new Map<string, number>());
   for (const point of points) {
     const timestamp = new Date(point.date).getTime();
     if (!Number.isFinite(timestamp)) continue;
@@ -205,7 +222,9 @@ function spendTrendChart(data: DashboardData): string {
     return `<g data-bucket-group="${escapeHtml(date)}"><rect class="chart-column-highlight" x="${slotX.toFixed(1)}" y="0" width="${slotWidth.toFixed(1)}" height="${height}"/><rect data-bucket-key="${escapeHtml(date)}" x="${slotX.toFixed(1)}" y="0" width="${slotWidth.toFixed(1)}" height="${height}" fill="transparent" pointer-events="all"/>${segments}</g>`;
   }).join('');
 
-  const labelIndexes = [...new Set([0, Math.floor((dates.length - 1) / 2), dates.length - 1])];
+  const labelCount = Math.min(7, dates.length);
+  const labelIndexes = [...new Set(Array.from({ length: labelCount }, (_, index) =>
+    Math.round(index * (dates.length - 1) / Math.max(1, labelCount - 1))))];
   const labels = labelIndexes.map(index => {
     const date = new Date(dates[index]!);
     const label = date.toLocaleString('en-US', range === '24h'
@@ -215,7 +234,7 @@ function spendTrendChart(data: DashboardData): string {
   }).join('');
   const legend = models.map(model => `<span class="chart-legend-item"><i style="background:${colorFor.get(model)}"></i>${escapeHtml(model)}</span>`).join('');
 
-  return `<div class="chart-wrap"><div class="chart-y-labels"><span>${money(max)}</span><span>${money(max * .75)}</span><span>${money(max * .5)}</span><span>${money(max * .25)}</span><span>$0</span></div><div class="spend-chart-stage"><svg class="spend-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Stacked spend by model during ${labelForRange(range)}">${grid}${columns}</svg><div class="chart-tooltip" role="tooltip" hidden></div></div><div class="chart-x-labels">${labels}</div><div class="sr-only">Stacked by model: ${models.map(escapeHtml).join(', ')}</div></div><div class="panel-foot"><div class="chart-legend">${legend}</div><span class="panel-foot-range">${labelForRange(range)}</span></div>`;
+  return `<div class="chart-wrap"><div class="chart-y-labels"><span>${money(max)}</span><span>${money(max * .75)}</span><span>${money(max * .5)}</span><span>${money(max * .25)}</span><span>$0</span></div><div class="spend-chart-stage"><svg class="spend-chart" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Stacked spend by model during ${labelForRange(range)}">${grid}${columns}</svg><div class="chart-tooltip" role="tooltip" hidden></div></div><div class="chart-x-labels" style="grid-template-columns:repeat(${labelIndexes.length},minmax(0,1fr))">${labels}</div><div class="sr-only">Stacked by model: ${models.map(escapeHtml).join(', ')}</div></div><div class="panel-foot"><div class="chart-legend">${legend}</div><span class="panel-foot-range">${labelForRange(range)}</span></div>`;
 }
 
 function tokenBreakdown(data: DashboardData): string {
@@ -244,46 +263,43 @@ function modelList(data: DashboardData): string {
   return `<div class="model-list">${data.models.slice(0, 6).map(item => `<div class="model-row"><div class="model-row-head"><div class="model-name"><span class="model-orb">✳</span><span title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</span></div><div class="model-amount">${money(item.spend)}</div></div><div class="model-row-sub"><span>${compact(item.tokens)} tokens</span><span>${item.spend ? `${(item.spend / Math.max(data.metrics.spend ?? item.spend, 0.0001) * 100).toFixed(0)}% of spend` : '—'}</span></div><div class="model-track"><span style="width:${Math.max(item.spend ? 2 : 0, item.spend / max * 100)}%"></span></div></div>`).join('')}</div>`;
 }
 
-function cachePanel(data: DashboardData): string {
-  const rate = data.metrics.cacheHitRate;
-  return `<div class="cache-content"><div class="cache-rate">${percent(rate)}</div><p>of eligible prompt tokens were served from cache</p><div class="cache-meter"><span style="width:${Math.min(100, Math.max(0, rate == null ? 0 : rate <= 1 ? rate * 100 : rate))}%"></span></div><div class="cache-foot"><span>Cache hit rate</span><strong>${rate == null ? 'Not provided by analytics' : 'Current range'}</strong></div></div>`;
-}
-
 function appTemplate(): string {
   const data = latest;
   const metrics = data?.metrics;
   return `<div class="app-shell">
     <main class="main-content" id="activity">
       <div class="content-wrap">
-        <div class="page-heading"><div><h1>Activity</h1><p>Usage across your models on OpenRouter</p></div><div class="heading-controls"><span class="auto-refresh"><i></i>Auto-refresh · 15s</span><label class="range-select">${icon('calendar', 16)}<select id="range" aria-label="Date range"><option value="24h" ${range === '24h' ? 'selected' : ''}>Past 24 hours</option><option value="7d" ${range === '7d' ? 'selected' : ''}>Past 7 days</option><option value="30d" ${range === '30d' ? 'selected' : ''}>Past 30 days</option></select><span class="select-chevron">⌄</span></label><button id="refresh" class="icon-button" aria-label="Refresh dashboard" ${loading ? 'disabled' : ''}>${icon('refresh', 17)}</button></div></div>
+        <div class="page-heading"><div class="page-title"><h1>OpenRouter Usage</h1></div><div class="heading-controls"><span class="auto-refresh"><i></i><span id="refresh-countdown">${loading ? 'Refreshing…' : refreshCountdown()}</span></span><label class="range-select">${icon('calendar', 16)}<select id="range" aria-label="Date range"><option value="24h" ${range === '24h' ? 'selected' : ''}>Past 24 hours</option><option value="7d" ${range === '7d' ? 'selected' : ''}>Past 7 days</option><option value="30d" ${range === '30d' ? 'selected' : ''}>Past 30 days</option></select><span class="select-chevron">⌄</span></label><button id="refresh" class="icon-button" aria-label="Refresh dashboard" ${loading ? 'disabled' : ''}>${icon('refresh', 17)}</button></div></div>
         ${errorMessage ? `<section class="notice ${errorMessage.includes('Add your') ? 'notice-setup' : 'notice-error'}" role="alert"><div class="notice-icon">!</div><div><strong>${errorMessage.includes('Add your') ? 'Connect your OpenRouter account' : 'Couldn’t load live usage'}</strong><p>${escapeHtml(errorMessage)}</p>${errorMessage.includes('Add your') ? '<p class="setup-hint">In <code>openrouter-dashboard/</code>, copy <code>.env.example</code> to <code>.env</code>, add a Management API key, then restart the app.</p>' : ''}</div><button id="retry" class="text-button">Retry</button></section>` : ''}
         <section class="metric-grid" id="overview" aria-label="Usage summary">
-          ${metricCard('Available credits', money(data?.credits.remaining), data ? `of ${money(data.credits.total)} purchased` : 'Connect to load balance', 'coin', '#9b6cff', 'credits', data)}
-          ${metricCard('Total spend', money(metrics?.spend), data ? 'OpenRouter usage' : 'Selected date range', 'arrow', '#ff684c', 'spend', data)}
-          ${metricCard('Requests', compact(metrics?.requests), data ? 'Completed requests' : 'Selected date range', 'requests', '#62c4a6', 'requests', data)}
-          ${metricCard('Token volume', compact(metrics?.tokens), data ? 'Prompt + generated' : 'Selected date range', 'tokens', '#548dff', 'tokens', data)}
-          ${metricCard('Cache hit rate', percent(metrics?.cacheHitRate), 'Prompt cache hits', 'activity', '#f5b942', 'cacheHitRate', data)}
+          ${metricCard('Available credits', money(data?.credits.remaining), 'coin', '#9b6cff', 'credits', data)}
+          ${metricCard('Total spend', money(metrics?.spend), 'arrow', '#ff684c', 'spend', data)}
+          ${metricCard('Requests', compact(metrics?.requests), 'requests', '#62c4a6', 'requests', data)}
+          ${metricCard('Token volume', compact(metrics?.tokens), 'tokens', '#548dff', 'tokens', data)}
+          ${metricCard('Cache hit rate', percent(metrics?.cacheHitRate), 'activity', '#f5b942', 'cacheHitRate', data)}
         </section>
         <section class="chart-panel panel">
           <div class="panel-heading"><div><h2>Spend over time</h2><p>Hourly usage · all models</p></div><div class="chart-total"><span>Range total</span><strong>${money(metrics?.spend)}</strong></div></div>
           ${data ? spendTrendChart(data) : emptyState(loading ? 'Loading activity…' : 'Connect to load your usage history.')}
         </section>
-        <section class="two-column">
-          <article class="panel" id="keys"><div class="panel-heading"><div><h2>Top API keys</h2><p>Ranked by generated tokens</p></div><span class="heading-icon">${icon('key')}</span></div>${data ? keyList(data) : emptyState(loading ? 'Loading API key usage…' : 'Connect to load key usage.')}</article>
-          <article class="panel"><div class="panel-heading"><div><h2>Usage by model</h2><p>Spend and token volume</p></div><span class="heading-icon">${icon('tokens')}</span></div>${data ? modelList(data) : emptyState(loading ? 'Loading model usage…' : 'Connect to load model usage.')}</article>
+        <section class="usage-layout">
+          <article class="panel usage-keys" id="keys"><div class="panel-heading"><div><h2>Top API keys</h2><p>Ranked by generated tokens</p></div><span class="heading-icon">${icon('key')}</span></div>${data ? keyList(data) : emptyState(loading ? 'Loading API key usage…' : 'Connect to load key usage.')}</article>
+          <article class="panel usage-model"><div class="panel-heading"><div><h2>Usage by model</h2><p>Spend and token volume</p></div><span class="heading-icon">${icon('tokens')}</span></div>${data ? modelList(data) : emptyState(loading ? 'Loading model usage…' : 'Connect to load model usage.')}</article>
+          <article class="panel usage-tokens"><div class="panel-heading"><div><h2>Token breakdown</h2><p>Prompt, completion, and reasoning</p></div><span class="heading-icon">${icon('tokens')}</span></div>${data ? tokenBreakdown(data) : emptyState('Connect to load token usage.')}</article>
         </section>
-        <section class="two-column lower-panels">
-          <article class="panel"><div class="panel-heading"><div><h2>Token breakdown</h2><p>Prompt, completion, and reasoning</p></div><span class="heading-icon">${icon('tokens')}</span></div>${data ? tokenBreakdown(data) : emptyState('Connect to load token usage.')}</article>
-          <article class="panel"><div class="panel-heading"><div><h2>Prompt token caching</h2><p>Share of cached prompt tokens</p></div><span class="heading-icon">${icon('activity')}</span></div>${data ? cachePanel(data) : emptyState('Connect to load cache statistics.')}</article>
-        </section>
-        <footer class="page-footer"><span>Data provided by OpenRouter Analytics</span><span>${data ? `Updated ${new Date(data.updatedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : 'Waiting for connection'}</span></footer>
       </div>
     </main>
   </div>`;
 }
 
 function render(): void {
+  const previousValues = new Map<string, string>();
+  for (const element of root.querySelectorAll<HTMLElement>('[data-metric-value]')) {
+    const key = element.dataset.metricValue;
+    if (key) previousValues.set(key, element.dataset.defaultValue ?? element.textContent ?? '');
+  }
   root.innerHTML = appTemplate();
+  animateMetricValues(previousValues);
   attachSpendTooltip();
   attachMetricSparklines();
   root.querySelector<HTMLSelectElement>('#range')?.addEventListener('change', event => {
@@ -294,6 +310,27 @@ function render(): void {
   root.querySelector<HTMLButtonElement>('#retry')?.addEventListener('click', () => void loadDashboard());
 }
 
+function animateMetricValues(previousValues: Map<string, string>): void {
+  for (const element of root.querySelectorAll<HTMLElement>('[data-metric-value]')) {
+    const key = element.dataset.metricValue;
+    const previous = key ? previousValues.get(key) : undefined;
+    const next = element.dataset.defaultValue;
+    if (!previous || !next || previous === next || !/\d/.test(previous)) continue;
+    element.setAttribute('aria-label', next);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      element.innerHTML = metricNumberMarkup(next);
+      continue;
+    }
+
+    element.innerHTML = rollingMetricMarkup(next, previous);
+    const track = element.querySelector<HTMLElement>('.metric-roll-track');
+    track?.addEventListener('animationend', () => {
+      element.innerHTML = metricNumberMarkup(next);
+      element.setAttribute('aria-label', next);
+    }, { once: true });
+  }
+}
+
 function attachMetricSparklines(): void {
   if (!latest) return;
   for (const chart of root.querySelectorAll<SVGSVGElement>('[data-metric-sparkline]')) {
@@ -301,9 +338,8 @@ function attachMetricSparklines(): void {
     const samples = metricSamples(latest, metric);
     const card = chart.closest<HTMLElement>('.metric-card');
     const value = card?.querySelector<HTMLElement>('[data-metric-value]');
-    const period = card?.querySelector<HTMLElement>('[data-metric-period]');
     const marker = chart.querySelector<SVGCircleElement>('.sparkline-marker');
-    if (!card || !value || !period || !marker || !samples.length) continue;
+    if (!card || !value || !marker || !samples.length) continue;
 
     chart.addEventListener('pointermove', event => {
       const bounds = chart.getBoundingClientRect();
@@ -311,15 +347,18 @@ function attachMetricSparklines(): void {
       const index = Math.round(fraction * (samples.length - 1));
       const sample = samples[index]!;
       const point = sparklinePoint(samples, index);
-      value.textContent = formatMetricValue(metric, sample.value);
-      period.textContent = formatInterval(sample.date);
+      const formattedValue = formatMetricValue(metric, sample.value);
+      value.innerHTML = metricNumberMarkup(formattedValue);
+      value.setAttribute('aria-label', formattedValue);
+      card.setAttribute('aria-label', `${card.dataset.metricLabel}: ${formattedValue} for ${formatInterval(sample.date)}`);
       marker.setAttribute('cx', String(point.x));
       marker.setAttribute('cy', String(point.y));
       marker.setAttribute('opacity', '1');
     });
     chart.addEventListener('pointerleave', () => {
-      value.textContent = value.dataset.defaultValue ?? '';
-      period.textContent = labelForRange(range);
+      value.innerHTML = metricNumberMarkup(value.dataset.defaultValue ?? '');
+      value.setAttribute('aria-label', value.dataset.defaultValue ?? '');
+      card.removeAttribute('aria-label');
       marker.setAttribute('opacity', '0');
     });
   }
@@ -373,6 +412,16 @@ function attachSpendTooltip(): void {
       : '<div class="chart-tooltip-empty">No spend in this period</div>';
     tooltip.innerHTML = `<div class="chart-tooltip-heading"><span>${escapeHtml(dateLabel)}</span><strong>${money(total)}</strong></div><div class="chart-tooltip-models">${details}</div>`;
     tooltip.hidden = false;
+
+    const bounds = stage.getBoundingClientRect();
+    const groupBounds = group?.getBoundingClientRect();
+    const barCenter = groupBounds
+      ? groupBounds.left + groupBounds.width / 2 - bounds.left
+      : event.clientX - bounds.left;
+    const tooltipHalfWidth = tooltip.offsetWidth / 2;
+    const minX = Math.min(tooltipHalfWidth + 8, bounds.width / 2);
+    const maxX = Math.max(bounds.width - tooltipHalfWidth - 8, bounds.width / 2);
+    tooltip.style.left = `${Math.min(Math.max(barCenter, minX), maxX)}px`;
   });
   chart.addEventListener('pointerleave', () => {
     tooltip.hidden = true;
@@ -394,10 +443,15 @@ async function loadDashboard(): Promise<void> {
     errorMessage = error instanceof Error ? error.message : 'Unexpected error while loading data.';
   } finally {
     loading = false;
+    nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
     render();
   }
 }
 
 render();
 void loadDashboard();
-window.setInterval(() => void loadDashboard(), AUTO_REFRESH_MS);
+window.setInterval(() => {
+  if (!loading && Date.now() >= nextRefreshAt) void loadDashboard();
+  const countdown = root.querySelector<HTMLElement>('#refresh-countdown');
+  if (countdown) countdown.textContent = loading ? 'Refreshing…' : refreshCountdown();
+}, 1000);
