@@ -273,11 +273,12 @@ function modelList(data: DashboardData): string {
 function appTemplate(): string {
   const data = latest;
   const metrics = data?.metrics;
+  const setupError = errorMessage.includes('Add your');
   return `<div class="app-shell">
     <main class="main-content" id="activity">
       <div class="content-wrap">
-        <div class="page-heading"><div class="page-title"><h1>OpenRouter Usage</h1></div><div class="heading-controls"><span class="auto-refresh"><i></i><span id="refresh-countdown">${loading ? 'Refreshing…' : refreshCountdown()}</span></span><label class="range-select">${icon('calendar', 16)}<select id="range" aria-label="Date range"><option value="24h" ${range === '24h' ? 'selected' : ''}>Past 24 hours</option><option value="7d" ${range === '7d' ? 'selected' : ''}>Past 7 days</option><option value="30d" ${range === '30d' ? 'selected' : ''}>Past 30 days</option></select><span class="select-chevron">⌄</span></label><button id="refresh" class="icon-button" aria-label="Refresh dashboard" ${loading ? 'disabled' : ''}>${icon('refresh', 17)}</button></div></div>
-        ${errorMessage ? `<section class="notice ${errorMessage.includes('Add your') ? 'notice-setup' : 'notice-error'}" role="alert"><div class="notice-icon">!</div><div><strong>${errorMessage.includes('Add your') ? 'Connect your OpenRouter account' : 'Couldn’t load live usage'}</strong><p>${escapeHtml(errorMessage)}</p>${errorMessage.includes('Add your') ? '<p class="setup-hint">In <code>openrouter-dashboard/</code>, copy <code>.env.example</code> to <code>.env</code>, add a Management API key, then restart the app.</p>' : ''}</div><button id="retry" class="text-button">Retry</button></section>` : ''}
+        <div class="page-heading"><div class="page-title"><h1>OpenRouter Usage</h1></div><div class="heading-controls"><span class="refresh-status"><span id="refresh-error" class="refresh-error" role="status" title="${escapeHtml(errorMessage)}" ${!errorMessage || setupError ? 'hidden' : ''}>${setupError ? '' : escapeHtml(errorMessage)}</span><span class="auto-refresh"><i></i><span id="refresh-countdown">${loading ? 'Refreshing…' : refreshCountdown()}</span></span></span><label class="range-select">${icon('calendar', 16)}<select id="range" aria-label="Date range"><option value="24h" ${range === '24h' ? 'selected' : ''}>Past 24 hours</option><option value="7d" ${range === '7d' ? 'selected' : ''}>Past 7 days</option><option value="30d" ${range === '30d' ? 'selected' : ''}>Past 30 days</option></select><span class="select-chevron">⌄</span></label><button id="refresh" class="icon-button" aria-label="Refresh dashboard" ${loading ? 'disabled' : ''}>${icon('refresh', 17)}</button></div></div>
+        ${setupError ? `<section class="notice notice-setup" role="alert"><div class="notice-icon">!</div><div><strong>Connect your OpenRouter account</strong><p>${escapeHtml(errorMessage)}</p><p class="setup-hint">In <code>openrouter-dashboard/</code>, copy <code>.env.example</code> to <code>.env</code>, add a Management API key, then restart the app.</p></div><button id="retry" class="text-button">Retry</button></section>` : ''}
         <section class="metric-grid" id="overview" aria-label="Usage summary">
           ${metricCard('Available credits', money(data?.credits.remaining), 'coin', '#9b6cff', 'credits', data)}
           ${metricCard('Total spend', money(metrics?.spend), 'arrow', '#ff684c', 'spend', data)}
@@ -445,22 +446,40 @@ function attachSpendTooltip(): void {
   });
 }
 
+function updateRefreshStatus(): void {
+  const error = root.querySelector<HTMLElement>('#refresh-error');
+  if (error) {
+    error.hidden = !errorMessage || errorMessage.includes('Add your');
+    error.textContent = error.hidden ? '' : errorMessage;
+    error.title = errorMessage;
+  }
+  const countdown = root.querySelector<HTMLElement>('#refresh-countdown');
+  if (countdown) countdown.textContent = loading ? 'Refreshing…' : refreshCountdown();
+  const refresh = root.querySelector<HTMLButtonElement>('#refresh');
+  if (refresh) refresh.disabled = loading;
+}
+
 async function loadDashboard(): Promise<void> {
   if (loading) return;
+  const hadSetupError = errorMessage.includes('Add your');
+  let refreshSucceeded = false;
   loading = true;
   errorMessage = '';
-  render();
+  if (latest && !hadSetupError) updateRefreshStatus();
+  else render();
   try {
     const response = await fetch(`/api/dashboard?range=${range}`, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
     latest = payload as DashboardData;
+    refreshSucceeded = true;
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : 'Unexpected error while loading data.';
   } finally {
     loading = false;
     nextRefreshAt = Date.now() + AUTO_REFRESH_MS;
-    render();
+    if (refreshSucceeded || !latest || errorMessage.includes('Add your')) render();
+    else updateRefreshStatus();
   }
 }
 

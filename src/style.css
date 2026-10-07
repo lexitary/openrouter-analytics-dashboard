@@ -28,6 +28,9 @@
   h1 { @apply m-0 text-[30px] font-semibold tracking-[-.04em] text-[#f4f5f6] sm:text-[34px]; }
   .page-heading p { @apply mb-0 mt-1.5 text-[13px] text-[#92999d]; }
   .heading-controls { @apply flex flex-wrap items-center gap-2; }
+  .refresh-status { @apply flex items-center gap-2; }
+  .refresh-error { @apply max-w-[150px] truncate text-[11px] text-[#ff8b78]; }
+  .refresh-error[hidden] { @apply hidden; }
   .auto-refresh { @apply flex items-center gap-1.5 whitespace-nowrap text-[11px] text-[#929a9e]; }
   .auto-refresh i { @apply h-1.5 w-1.5 rounded-full bg-[#4fcea1]; }
   .range-select { @apply relative flex h-10 min-w-[178px] items-center gap-2 rounded-lg border border-[#272c2f] bg-[#0c0f11] px-3 text-[#d1d4d5]; }
@@ -36,7 +39,6 @@
   .select-chevron { @apply pointer-events-none absolute right-3 text-[#778084]; }
   .notice { @apply mb-5 flex items-start gap-3 rounded-xl border p-4; }
   .notice-setup { @apply border-[#5c5128] bg-[#17160e]; }
-  .notice-error { @apply border-[#60352e] bg-[#1b1210]; }
   .notice-icon { @apply flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#f6b841]/15 text-xs font-bold text-[#f6c65f]; }
   .notice strong { @apply text-[13px] font-semibold text-[#f1efde]; }
   .notice p { @apply mb-0 mt-1 text-[12px] leading-5 text-[#b5b3a5]; }
