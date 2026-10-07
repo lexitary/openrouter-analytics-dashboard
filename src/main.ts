@@ -468,7 +468,7 @@ async function loadDashboard(): Promise<void> {
   if (latest && !hadSetupError) updateRefreshStatus();
   else render();
   try {
-    const response = await fetch(`/api/dashboard?range=${range}`, { cache: 'no-store' });
+    const response = await fetch(`${import.meta.env.BASE_URL}api/dashboard?range=${range}`, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error ?? `Request failed (${response.status})`);
     latest = payload as DashboardData;
